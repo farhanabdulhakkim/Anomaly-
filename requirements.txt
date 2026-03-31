@@ -1,0 +1,21 @@
+# ── Core data processing ──────────────────────────────────────────────────────
+pandas>=2.0
+numpy>=1.24
+
+# ── Excel / legacy file support ───────────────────────────────────────────────
+openpyxl>=3.1      # .xlsx files
+xlrd>=2.0.1        # .xls (legacy binary Excel)
+
+# ── Optional: accurate UTM projection (drop-in upgrade for grid_engine.py) ───
+# pyproj>=3.6
+
+# ── Map generation ───────────────────────────────────────────────────────────
+folium>=0.15
+
+# ── Optional: Flask back-end ──────────────────────────────────────────────────
+flask>=3.0
+
+# ── Optional: ML model inference ──────────────────────────────────────────────
+# tensorflow>=2.14   # for CNN anomaly detection
+# torch>=2.1         # or PyTorch
+# Pillow>=10.0       # image pre-processing for patches
