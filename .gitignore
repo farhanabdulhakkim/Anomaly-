@@ -7,3 +7,6 @@ output/
 field_map.html
 *.egg-info/
 .env
+*.csv
+*.xls
+*.xlsx

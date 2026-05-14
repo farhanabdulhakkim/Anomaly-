@@ -20,6 +20,7 @@ import pandas as pd
 import numpy as np
 
 import config
+import logparser
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -70,30 +71,47 @@ def _normalise_to_field(
 
 def load_raw(filepath: str) -> pd.DataFrame:
     """
-    Read a CSV or legacy .xls file (detected automatically).
+    Load telemetry via logparser (ArduPilot CSV) if the file is
+    ardupilot_log.csv, otherwise fall back to direct CSV/XLS read.
 
-    Expected columns (case-insensitive, extra columns ignored):
-        Timestamp | Latitude | Longitude | Altitude | Speed
+    Output columns (normalised): timestamp, raw_lat, raw_lon, altitude, speed
     """
-    fp = filepath.lower()
-    if fp.endswith(".csv") or fp.endswith(".xls"):
-        try:
-            df = pd.read_csv(filepath)
-        except Exception:
-            df = pd.read_excel(filepath)
+    import os
+    if os.path.basename(filepath) == "ardupilot_log.csv":
+        clean = logparser.build_clean_dataset(filepath)
+        # logparser nullifies Longitude (>180) as invalid GPS.
+        # Re-read the source XLS to recover the original raw sensor columns
+        # (Latitude ~77, Longitude ~405) so _normalise_to_field can remap them.
+        src_xls = os.path.join(os.path.dirname(filepath), "drone_flight_with_timestamp.xls")
+        raw_src = pd.read_csv(src_xls)
+        raw_src.columns = [c.strip().lower() for c in raw_src.columns]
+        df = pd.DataFrame({
+            "timestamp" : clean["Timestamp"],
+            "raw_lat"   : raw_src["latitude"].values,
+            "raw_lon"   : raw_src["longitude"].values,
+            "altitude"  : clean["Altitude_m"],
+            "speed"     : clean["Speed_ms"],
+        })
     else:
-        df = pd.read_excel(filepath)
+        fp = filepath.lower()
+        if fp.endswith(".csv") or fp.endswith(".xls"):
+            try:
+                df = pd.read_csv(filepath)
+            except Exception:
+                df = pd.read_excel(filepath)
+        else:
+            df = pd.read_excel(filepath)
 
-    # Normalise column names
-    df.columns = [c.strip().lower() for c in df.columns]
-    rename_map = {
-        "timestamp" : "timestamp",
-        "latitude"  : "raw_lat",
-        "longitude" : "raw_lon",
-        "altitude"  : "altitude",
-        "speed"     : "speed",
-    }
-    df = df.rename(columns=rename_map)
+        df.columns = [c.strip().lower() for c in df.columns]
+        rename_map = {
+            "timestamp" : "timestamp",
+            "latitude"  : "raw_lat",
+            "longitude" : "raw_lon",
+            "altitude"  : "altitude",
+            "speed"     : "speed",
+        }
+        df = df.rename(columns=rename_map)
+
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.sort_values("timestamp").reset_index(drop=True)
     return df

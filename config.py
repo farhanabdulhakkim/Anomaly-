@@ -50,7 +50,7 @@ COLOR_MED     = "#FF6D00"   # orange — 2 anomalies
 COLOR_HIGH    = "#D50000"   # red    — ≥ 3 anomalies
 
 # ─── I/O ──────────────────────────────────────────────────────────────────────
-INPUT_FILE   = "drone_flight_with_timestamp__1_.xls"
+INPUT_FILE   = "ardupilot_log.csv"
 OUTPUT_HTML  = "output/field_map.html"
 OUTPUT_JSON  = "output/field_data.json"
 
