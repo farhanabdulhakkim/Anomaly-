@@ -1,0 +1,251 @@
+# API Reference
+
+Base URL: `http://localhost:8000`  
+Interactive docs: `http://localhost:8000/docs`
+
+All protected endpoints require:
+```
+Authorization: Bearer <access_token>
+```
+
+---
+
+## Authentication
+
+### POST /api/auth/register
+Register a new user.
+
+**Request**
+```json
+{
+  "email": "user@farm.com",
+  "full_name": "Farmer Name",
+  "password": "yourpassword"
+}
+```
+**Response 201**
+```json
+{
+  "id": "uuid",
+  "email": "user@farm.com",
+  "full_name": "Farmer Name",
+  "is_active": true,
+  "created_at": "2026-05-14T19:11:11Z"
+}
+```
+
+---
+
+### POST /api/auth/login
+Login and get JWT token.
+
+**Request** (form data)
+```
+username=user@farm.com
+password=yourpassword
+```
+**Response 200**
+```json
+{
+  "access_token": "eyJhbGci...",
+  "token_type": "bearer"
+}
+```
+
+---
+
+### GET /api/auth/me
+Get current authenticated user.
+
+---
+
+## Fields
+
+### POST /api/fields
+Create a field and generate its permanent 10m x 10m grid.
+
+**Request**
+```json
+{
+  "name": "Erode Paddy Field 1",
+  "rice_type": "IR64",
+  "soil_type": "clay",
+  "irrigation_type": "drip",
+  "area_hectares": 2.5,
+  "cell_size_m": 10,
+  "boundary_geojson": {
+    "type": "Polygon",
+    "coordinates": [[
+      [77.7195, 11.3390],
+      [77.7213, 11.3390],
+      [77.7213, 11.3408],
+      [77.7195, 11.3408],
+      [77.7195, 11.3390]
+    ]]
+  }
+}
+```
+**Response 201**
+```json
+{
+  "id": "uuid",
+  "name": "Erode Paddy Field 1",
+  "n_rows": 20,
+  "n_cols": 20,
+  "cell_size_m": 10,
+  ...
+}
+```
+
+---
+
+### GET /api/fields
+List all fields owned by the current user.
+
+---
+
+### GET /api/fields/{field_id}
+Get a single field by ID.
+
+---
+
+### PATCH /api/fields/{field_id}
+Update field metadata (name, rice_type, soil_type, etc).
+
+---
+
+### GET /api/fields/{field_id}/grid/geojson
+Get the permanent grid as GeoJSON FeatureCollection.
+
+---
+
+## Missions
+
+### POST /api/fields/{field_id}/missions
+Create a new mission for a field.
+
+**Request**
+```json
+{
+  "name": "Mission 1 - May 2026",
+  "drone_model": "DJI Phantom 4",
+  "flight_altitude_m": 30,
+  "anomaly_mode": "rule_based",
+  "flight_date": "2026-05-14T10:00:00Z"
+}
+```
+
+---
+
+### GET /api/fields/{field_id}/missions
+List all missions for a field, newest first.
+
+---
+
+### GET /api/fields/{field_id}/missions/{mission_id}
+Get mission details including status and anomaly counts.
+
+---
+
+### POST /api/fields/{field_id}/missions/{mission_id}/upload-telemetry
+Upload drone telemetry file and run the full pipeline.
+
+**Request** — multipart/form-data
+```
+file: drone_flight_with_timestamp.xls
+```
+
+**Response**
+```json
+{
+  "id": "uuid",
+  "status": "completed",
+  "total_points": 225,
+  "anomaly_point_count": 59,
+  "anomaly_cell_count": 23,
+  "duration_s": 22.48
+}
+```
+
+---
+
+### GET /api/fields/{field_id}/missions/{mission_id}/analytics
+Get computed analytics for a mission.
+
+**Response**
+```json
+{
+  "mission_id": "uuid",
+  "total_cells": 441,
+  "anomaly_cells": 23,
+  "clean_cells": 418,
+  "total_anomaly_points": 59,
+  "avg_anomaly_density": 0.31,
+  "max_anomaly_density": 0.85,
+  "anomaly_reduction_pct": 62.7,
+  "cell_change_count": -14
+}
+```
+
+---
+
+### GET /api/fields/{field_id}/missions/{mission_id}/anomalies/geojson
+Get anomalous grid cells as GeoJSON for map rendering.
+
+---
+
+### GET /api/fields/{field_id}/missions/compare/{mission_a_id}/{mission_b_id}
+Compare two missions side by side.
+
+**Response**
+```json
+{
+  "mission_a_anomaly_cells": 37,
+  "mission_b_anomaly_cells": 23,
+  "reduction_pct": 37.8,
+  "new_anomaly_cells": ["uuid1", "uuid2"],
+  "resolved_anomaly_cells": ["uuid3", "uuid4", "uuid5"],
+  "recurring_anomaly_cells": ["uuid6"]
+}
+```
+
+---
+
+## Analytics
+
+### GET /api/analytics/fields/{field_id}/trend
+Get anomaly trend across all completed missions for a field.
+
+**Response**
+```json
+{
+  "field_id": "uuid",
+  "trend": [
+    {
+      "mission_id": "uuid",
+      "mission_name": "Mission 1",
+      "flight_date": "2026-04-01T00:00:00Z",
+      "anomaly_cells": 37,
+      "total_anomaly_points": 89,
+      "reduction_pct": null
+    },
+    {
+      "mission_id": "uuid",
+      "mission_name": "Mission 2",
+      "flight_date": "2026-05-14T00:00:00Z",
+      "anomaly_cells": 23,
+      "total_anomaly_points": 59,
+      "reduction_pct": 37.8
+    }
+  ]
+}
+```
+
+---
+
+## Health Check
+
+### GET /health
+```json
+{ "status": "ok", "version": "2.0.0" }
+```
