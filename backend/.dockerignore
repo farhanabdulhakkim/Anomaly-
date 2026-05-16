@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+maps/
+frames/
+dataset/tests/
+dataset/output/
+
+*.log
+*.tmp
