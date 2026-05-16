@@ -14,6 +14,7 @@ from app.api.auth import get_current_user
 from app.services.mission_service import MissionService
 from app.repositories.repositories import MissionRepository, AnalyticsRepository
 from app.schemas.schemas import MissionCreate, MissionOut, MissionCompareOut, AnalyticsOut
+from app.detection.cnn_pipeline import bounds_from_waypoints, run_video_cnn_detection
 
 router = APIRouter(prefix="/api/fields/{field_id}/missions", tags=["missions"])
 
@@ -94,7 +95,6 @@ async def upload_video(
     db: AsyncSession = Depends(get_db),
 ):
     """Upload drone video + ArduPilot CSV, run CNN pipeline, store Folium map."""
-    import subprocess, sys
     from app.repositories.repositories import MissionRepository
 
     repo = MissionRepository(db)
@@ -111,46 +111,53 @@ async def upload_video(
         cf.write(await csv_file.read())
         csv_path = cf.name
 
-    map_dir  = "/app/maps"
-    os.makedirs(map_dir, exist_ok=True)
-    grid_path = os.path.join(map_dir, f"{mission_id}_grid.png")
-    map_path  = os.path.join(map_dir, f"{mission_id}_map.html")
+    backend_root = Path(__file__).resolve().parents[2]
+    map_dir = backend_root / "maps"
+    work_dir = map_dir / str(mission_id)
+    map_dir.mkdir(parents=True, exist_ok=True)
+    grid_path = map_dir / f"{mission_id}_grid.png"
+    map_path = map_dir / f"{mission_id}_map.html"
 
     mission.status = "processing"
     await repo.update(mission)
 
     try:
-        result = subprocess.run(
-            [sys.executable, "/app/anomaly.py", video_path, csv_path, grid_path, ""],
-            capture_output=True, text=True, cwd="/app"
-        )
-        stdout = result.stdout + result.stderr
-
-        # Parse anomaly coords from stdout
-        import re
-        anomalies, lines = [], stdout.splitlines()
-        i = 0
-        while i < len(lines):
-            if "Hybrid plant detected at:" in lines[i]:
-                lat = lon = None
-                for j in range(i + 1, min(i + 5, len(lines))):
-                    m = re.search(r"Latitude:\s*([\d.\-]+)", lines[j])
-                    if m: lat = float(m.group(1))
-                    m = re.search(r"Longitude:\s*([\d.\-]+)", lines[j])
-                    if m: lon = float(m.group(1))
-                if lat and lon:
-                    anomalies.append({"lat": lat, "lng": lon, "severity": "medium", "detections": 1})
-            i += 1
-
-        # Build Folium map using final_log
-        sys.path.insert(0, "/app")
+        # Build Folium map inputs first so CMD waypoint bounds can guide the CNN grid.
         from final_log import parse_log, build_map
         pos_df, gps_df, last_mission_wps = parse_log(csv_path)
-        build_map(pos_df, gps_df, last_mission_wps, anomalies, map_path)
+
+        cmd_waypoints = mission.waypoints
+        if not cmd_waypoints and not last_mission_wps.empty:
+            cmd_waypoints = [
+                {"lat": float(wp.lat), "lon": float(wp.lng)}
+                for _, wp in last_mission_wps.iterrows()
+            ]
+
+        result = run_video_cnn_detection(
+            video_path=video_path,
+            gps_log_path=csv_path,
+            output_grid_path=grid_path,
+            work_dir=work_dir,
+            cmd_bounds=bounds_from_waypoints(cmd_waypoints),
+        )
+        anomalies = [
+            {
+                "lat": a.lat,
+                "lng": a.lng,
+                "severity": "medium",
+                "detections": 1,
+                "frame": a.frame_index,
+                "confidence": a.confidence,
+            }
+            for a in result.anomalies
+        ]
+
+        build_map(pos_df, gps_df, last_mission_wps, anomalies, str(map_path))
 
         # Update mission stats
         mission.anomaly_point_count = len(anomalies)
         mission.anomaly_cell_count  = len(set((a["lat"], a["lng"]) for a in anomalies))
+        mission.total_points = result.frames_processed
         mission.status = "completed"
         await repo.update(mission)
 
@@ -173,12 +180,14 @@ async def get_map_html(
 ):
     """Serve the stored Folium HTML map for a mission."""
     from fastapi.responses import FileResponse
-    map_path = f"/app/maps/{mission_id}_map.html"
+    backend_root = Path(__file__).resolve().parents[2]
+    map_path = backend_root / "maps" / f"{mission_id}_map.html"
     if not os.path.exists(map_path):
         raise HTTPException(status_code=404, detail="Map not generated yet")
     return FileResponse(map_path, media_type="text/html")
 
 
+@router.post("/{mission_id}/upload-plan")
 async def upload_mission_plan(
     field_id: uuid.UUID,
     mission_id: uuid.UUID,

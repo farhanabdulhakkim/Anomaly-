@@ -93,33 +93,20 @@ class RandomDetector(BaseAnomalyDetector):
 
 class CNNDetector(BaseAnomalyDetector):
     """
-    Plug in your ResNet / EfficientNet / YOLOv8 model here.
+    CNN-backed detector entry point.
 
-    Steps to activate:
-    1. Set anomaly_mode = "model" on the mission.
-    2. Implement _load_model() and _run_inference().
-    3. No other file needs to change.
+    The extracted PatchCNN works on video frames and is wired through the
+    upload-video endpoint. Telemetry-only missions do not contain image
+    patches, so this class keeps `anomaly_mode="model"` usable for the
+    existing telemetry pipeline by falling back to the altitude-based detector.
     """
 
-    def __init__(self, model_path: str):
+    def __init__(self, model_path: str | None = None):
         self.model_path = model_path
-        self._model = None
-
-    def _load_model(self):
-        # Example: self._model = tf.keras.models.load_model(self.model_path)
-        raise NotImplementedError("Implement _load_model() with your framework.")
-
-    def _run_inference(self, df: pd.DataFrame) -> np.ndarray:
-        # Example: patches = load_image_patches(df)
-        #          return (self._model.predict(patches) > 0.5).flatten()
-        raise NotImplementedError("Implement _run_inference() with your model.")
+        self._telemetry_fallback = RuleBasedDetector()
 
     def detect(self, df: pd.DataFrame) -> pd.DataFrame:
-        if self._model is None:
-            self._load_model()
-        df = df.copy()
-        df["anomaly"] = self._run_inference(df).astype(bool)
-        return df
+        return self._telemetry_fallback.detect(df)
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────
@@ -135,8 +122,5 @@ class DetectorFactory:
                 seed=kwargs.get("seed", 42),
             )
         if mode == "model":
-            model_path = kwargs.get("model_path")
-            if not model_path:
-                raise ValueError("model_path required for CNN detector")
-            return CNNDetector(model_path=model_path)
+            return CNNDetector(model_path=kwargs.get("model_path"))
         raise ValueError(f"Unknown anomaly mode: '{mode}'")
