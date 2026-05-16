@@ -36,6 +36,7 @@ export default function MissionMap() {
   const [flightPath, setFlightPath]   = useState(null)
   const [waypoints, setWaypoints]     = useState([])
   const [layers, setLayers]           = useState({ grid: true, path: true, anomalies: true, waypoints: true })
+  const [activeTab, setActiveTab]     = useState('leaflet') // 'leaflet' | 'folium'
 
   useEffect(() => { fetchAll() }, [missionId])
 
@@ -140,6 +141,18 @@ export default function MissionMap() {
         </div>
       </header>
 
+      {/* Tab bar */}
+      <div className="bg-gray-900 border-b border-gray-800 px-6 flex gap-1 flex-shrink-0">
+        {[['leaflet', 'GPS Grid Map'], ['folium', 'CNN Folium Map']].map(([key, label]) => (
+          <button key={key} onClick={() => setActiveTab(key)}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === key ? 'border-green-500 text-white' : 'border-transparent text-gray-400 hover:text-white'
+            }`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
       <div className="flex flex-1 overflow-hidden">
 
         {/* Sidebar */}
@@ -238,6 +251,13 @@ export default function MissionMap() {
 
         {/* Map */}
         <div className="flex-1 relative">
+          {activeTab === 'folium' ? (
+            <iframe
+              src={`/api/fields/${fieldId}/missions/${missionId}/map-html`}
+              className="w-full h-full border-0"
+              title="Folium CNN Map"
+            />
+          ) : (
           <MapContainer
             center={[11.3399, 77.7204]}
             zoom={18}
@@ -301,6 +321,7 @@ export default function MissionMap() {
             ))}
 
           </MapContainer>
+          )}
         </div>
       </div>
     </div>

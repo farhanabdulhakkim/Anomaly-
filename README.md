@@ -1,33 +1,49 @@
 # Precision Agriculture Drone Analytics Platform
 
 A production-grade drone-based anomaly detection system for paddy fields.
-Detects off-type plants using GPS telemetry, maps them onto a 10m x 10m grid,
-and provides a persistent REST API backed by PostgreSQL + PostGIS.
+Detects off-type plants using GPS telemetry and CNN video analysis, maps them
+onto a 10m x 10m grid, and provides a persistent REST API backed by
+PostgreSQL + PostGIS with a React dashboard frontend.
 
 ---
 
 ## Architecture
 
 ```
-Drone Telemetry (XLS/CSV)
+Drone Video (.mp4) + ArduPilot CSV
         |
         v
-  logparser.py          ArduPilot CSV parsing (GPS + ATT messages)
+  anomaly.py            PatchCNN frame-by-frame detection
         |
         v
-  data_processor.py     Coordinate normalisation + remapping
+  final_log.py          Folium map with GPS path + anomaly grid
         |
         v
-  grid_engine.py        10m x 10m grid assignment (Haversine-calibrated)
+  ┌─────────────────────────────────────────┐
+  │                                         │
+  │  Drone Telemetry (XLS/CSV)              │
+  │          |                              │
+  │          v                              │
+  │    logparser.py     ArduPilot CSV parse │
+  │          |                              │
+  │          v                              │
+  │    data_processor.py  Coord normalise   │
+  │          |                              │
+  │          v                              │
+  │    grid_engine.py   10m x 10m grid      │
+  │          |                              │
+  │          v                              │
+  │    anomaly_simulator.py  Rule/Random    │
+  │          |                              │
+  │          v                              │
+  │    map_generator.py  Folium HTML map    │
+  └─────────────────────────────────────────┘
         |
         v
-  anomaly_simulator.py  Rule-based / Random / CNN detection
+  backend/              FastAPI + PostgreSQL + PostGIS
         |
         v
-  map_generator.py      Folium interactive HTML map
-        |
-        v
-  backend/              FastAPI + PostgreSQL + PostGIS (persistent platform)
+  frontend/             React + Vite + Tailwind + Leaflet
 ```
 
 ---
@@ -48,9 +64,30 @@ miniproject/
 │   │   ├── detection/          Pluggable anomaly detector abstraction
 │   │   └── main.py             FastAPI app entry point
 │   ├── alembic/                Database migrations
+│   │   └── versions/
+│   │       ├── 0001_initial_schema.py
+│   │       └── 0002_add_waypoint_columns.py
+│   ├── anomaly.py              CNN video pipeline (PatchCNN)
+│   ├── final_log.py            Folium map builder
+│   ├── model.py                PatchCNN architecture
+│   ├── patch_cnn_model.pth     Trained CNN weights
+│   ├── logparser.py            ArduPilot CSV log parser
+│   ├── maps/                   Generated Folium HTML maps (runtime)
 │   ├── Dockerfile
 │   └── requirements.txt
-├── logparser.py                ArduPilot CSV log parser
+├── frontend/                   React + Vite dashboard
+│   ├── src/
+│   │   ├── api/                Axios client + service functions
+│   │   ├── components/         StatCard, TrendChart
+│   │   ├── pages/
+│   │   │   ├── Login.jsx
+│   │   │   ├── Dashboard.jsx   Field management
+│   │   │   ├── FieldDetail.jsx Mission management + uploads
+│   │   │   └── MissionMap.jsx  Leaflet map + Folium map tabs
+│   │   └── App.jsx
+│   ├── Dockerfile
+│   └── package.json
+├── logparser.py                ArduPilot CSV log parser (CLI)
 ├── convert_to_ardupilot.py     XLS to ArduPilot CSV converter
 ├── data_processor.py           GPS loading and coordinate normalisation
 ├── grid_engine.py              10m x 10m grid engine
@@ -59,7 +96,7 @@ miniproject/
 ├── main.py                     CLI pipeline entry point
 ├── app.py                      Legacy Flask server
 ├── config.py                   Pipeline configuration
-├── docker-compose.yml          PostgreSQL + PostGIS + API containers
+├── docker-compose.yml          PostgreSQL + PostGIS + API + Frontend
 └── README.md
 ```
 
@@ -82,13 +119,28 @@ python main.py drone_flight_with_timestamp.xls --mode rule_based
 ```bash
 cd backend
 copy .env.example .env
-# Edit .env and set SECRET_KEY to a random string
+# Edit .env — set SECRET_KEY to a random string
 
 cd ..
-docker-compose up --build
-# API running at http://localhost:8000
-# Swagger UI at http://localhost:8000/docs
+docker compose up --build
+# API:      http://localhost:8000
+# Frontend: http://localhost:3000
+# Swagger:  http://localhost:8000/docs
 ```
+
+---
+
+## Frontend Workflow
+
+After login and field creation:
+
+1. Create a mission on the Field Detail page
+2. Panel 1 — upload autopilot plan (`.waypoints` / `.plan`) — optional
+3. Panel 2 — upload GPS telemetry (`.xls` / `.csv`) → rule-based/random anomaly detection
+4. Panel 3 — upload drone video (`.mp4`) + ArduPilot CSV → CNN pipeline → Folium map
+5. Click "View Map & Analytics" to open the mission map with two tabs:
+   - GPS Grid Map — Leaflet interactive grid coloured by anomaly density
+   - CNN Folium Map — Folium HTML from the CNN video pipeline
 
 ---
 
@@ -106,7 +158,12 @@ docker-compose up --build
 | GET | `/api/fields/{id}/grid/geojson` | Field grid as GeoJSON |
 | POST | `/api/fields/{id}/missions` | Create mission |
 | GET | `/api/fields/{id}/missions` | List missions |
-| POST | `/api/fields/{id}/missions/{id}/upload-telemetry` | Upload + process telemetry |
+| POST | `/api/fields/{id}/missions/{id}/upload-telemetry` | Upload GPS log + run pipeline |
+| POST | `/api/fields/{id}/missions/{id}/upload-video` | Upload video + CSV → CNN pipeline |
+| POST | `/api/fields/{id}/missions/{id}/upload-plan` | Upload autopilot waypoint plan |
+| GET | `/api/fields/{id}/missions/{id}/plan` | Get stored waypoint plan |
+| GET | `/api/fields/{id}/missions/{id}/map-html` | Serve Folium HTML map |
+| GET | `/api/fields/{id}/missions/{id}/flight-path` | Flight path as GeoJSON |
 | GET | `/api/fields/{id}/missions/{id}/analytics` | Mission analytics |
 | GET | `/api/fields/{id}/missions/{id}/anomalies/geojson` | Anomaly GeoJSON |
 | GET | `/api/fields/{id}/missions/compare/{a}/{b}` | Compare two missions |
@@ -135,6 +192,7 @@ docker-compose up --build
 | `rule_based` | Altitude variance per cell as canopy height proxy |
 | `random` | Random labelling for UI testing |
 | `model` | CNN stub — plug in ResNet/EfficientNet/YOLOv8 |
+| CNN video | PatchCNN on drone video frames via `upload-video` endpoint |
 
 ---
 
@@ -145,6 +203,9 @@ docker-compose up --build
 - PostgreSQL 16 + PostGIS 3.4
 - SQLAlchemy 2.0 (async) + GeoAlchemy2
 - Alembic migrations
+- PyTorch + OpenCV (CNN video pipeline)
 - Folium (map visualisation)
+- React 18 + Vite + Tailwind CSS
+- React Leaflet (interactive grid map)
 - Docker + docker-compose
 - JWT authentication (python-jose + passlib)

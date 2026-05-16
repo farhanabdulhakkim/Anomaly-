@@ -84,7 +84,101 @@ async def upload_telemetry(
     return mission
 
 
-@router.post("/{mission_id}/upload-plan", response_model=MissionOut)
+@router.post("/{mission_id}/upload-video", response_model=MissionOut)
+async def upload_video(
+    field_id: uuid.UUID,
+    mission_id: uuid.UUID,
+    video: UploadFile = File(...),
+    csv_file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload drone video + ArduPilot CSV, run CNN pipeline, store Folium map."""
+    import subprocess, sys
+    from app.repositories.repositories import MissionRepository
+
+    repo = MissionRepository(db)
+    mission = await repo.get_by_id(mission_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
+
+    # Save uploads to temp files
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as vf:
+        vf.write(await video.read())
+        video_path = vf.name
+
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as cf:
+        cf.write(await csv_file.read())
+        csv_path = cf.name
+
+    map_dir  = "/app/maps"
+    os.makedirs(map_dir, exist_ok=True)
+    grid_path = os.path.join(map_dir, f"{mission_id}_grid.png")
+    map_path  = os.path.join(map_dir, f"{mission_id}_map.html")
+
+    mission.status = "processing"
+    await repo.update(mission)
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "/app/anomaly.py", video_path, csv_path, grid_path, ""],
+            capture_output=True, text=True, cwd="/app"
+        )
+        stdout = result.stdout + result.stderr
+
+        # Parse anomaly coords from stdout
+        import re
+        anomalies, lines = [], stdout.splitlines()
+        i = 0
+        while i < len(lines):
+            if "Hybrid plant detected at:" in lines[i]:
+                lat = lon = None
+                for j in range(i + 1, min(i + 5, len(lines))):
+                    m = re.search(r"Latitude:\s*([\d.\-]+)", lines[j])
+                    if m: lat = float(m.group(1))
+                    m = re.search(r"Longitude:\s*([\d.\-]+)", lines[j])
+                    if m: lon = float(m.group(1))
+                if lat and lon:
+                    anomalies.append({"lat": lat, "lng": lon, "severity": "medium", "detections": 1})
+            i += 1
+
+        # Build Folium map using final_log
+        sys.path.insert(0, "/app")
+        from final_log import parse_log, build_map
+        pos_df, gps_df, last_mission_wps = parse_log(csv_path)
+        build_map(pos_df, gps_df, last_mission_wps, anomalies, map_path)
+
+        # Update mission stats
+        mission.anomaly_point_count = len(anomalies)
+        mission.anomaly_cell_count  = len(set((a["lat"], a["lng"]) for a in anomalies))
+        mission.status = "completed"
+        await repo.update(mission)
+
+    except Exception as e:
+        mission.status = "failed"
+        await repo.update(mission)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        os.unlink(video_path)
+        os.unlink(csv_path)
+
+    return mission
+
+
+@router.get("/{mission_id}/map-html", response_class=None)
+async def get_map_html(
+    field_id: uuid.UUID,
+    mission_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+):
+    """Serve the stored Folium HTML map for a mission."""
+    from fastapi.responses import FileResponse
+    map_path = f"/app/maps/{mission_id}_map.html"
+    if not os.path.exists(map_path):
+        raise HTTPException(status_code=404, detail="Map not generated yet")
+    return FileResponse(map_path, media_type="text/html")
+
+
 async def upload_mission_plan(
     field_id: uuid.UUID,
     mission_id: uuid.UUID,

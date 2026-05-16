@@ -4,56 +4,68 @@
 
 ## Overview
 
-The platform has two layers:
+The platform has three layers:
 
 1. **CLI Pipeline** — standalone Python scripts for quick local processing
 2. **Production Backend** — FastAPI + PostgreSQL + PostGIS for persistent multi-user analytics
+3. **React Frontend** — dashboard for field management, mission uploads, and map visualisation
 
 ---
 
-## Pipeline Flow
+## Dual Detection Pipeline
+
+### Pipeline A — GPS Telemetry (Rule-Based / Random)
 
 ```
-Drone Flight
+drone_flight_with_timestamp.xls  or  ardupilot_log.csv
      |
      v
-drone_flight_with_timestamp.xls
+mission_service._load_telemetry()
+     |  Reads XLS/CSV directly
+     |  Falls back to logparser.build_clean_dataset() for ArduPilot CSV
+     v
+mission_service._assign_grid_indices()
+     |  Maps GPS points onto field's permanent 10m x 10m grid
+     |  Uses field origin_lat / origin_lon — never recomputed
+     v
+detection/detectors.py
+     |  RuleBasedDetector  — altitude variance per cell > threshold
+     |  RandomDetector     — probability-based (UI testing)
+     |  CNNDetector        — stub for ResNet/EfficientNet/YOLOv8
+     v
+PostgreSQL
+     |  telemetry_points, anomalies, analytics_summary
+     v
+GET /anomalies/geojson  →  React Leaflet grid map
+```
+
+### Pipeline B — CNN Video (PatchCNN)
+
+```
+flight.mp4  +  ardupilot_log.csv
      |
      v
-convert_to_ardupilot.py
-     |  Converts raw XLS to ArduPilot CSV format
-     |  (GPS + ATT message rows)
-     v
-ardupilot_log.csv
+POST /upload-video
      |
      v
-logparser.py
-     |  Extracts GPS (Lat, Lon, Alt, Speed)
-     |  Extracts ATT (Roll, Pitch, Yaw)
-     |  Merges by nearest timestamp (500ms tolerance)
+anomaly.py
+     |  Extracts frames at 1 FPS
+     |  Runs PatchCNN on 17x17 patches (stride=8)
+     |  Flags frames where hybrid_ratio > 1% or max_conf > 0.55
+     |  Maps anomaly frames to GPS coordinates via timestamp interpolation
      v
-data_processor.py
-     |  Detects non-standard coordinates
-     |  Remaps onto real GPS field bbox
-     |  Computes elapsed_s
+final_log.py
+     |  Parses ArduPilot CSV (POS + GPS + CMD messages)
+     |  Builds Folium map:
+     |    - Actual GPS path (POS log, red)
+     |    - Raw GPS fixes (orange, dashed)
+     |    - Planned mission path (CMD waypoints, yellow)
+     |    - Anomaly detection markers (orange circles)
+     |    - 2m x 2m anomaly heatmap grid
      v
-grid_engine.py
-     |  Assigns grid_row, grid_col per point
-     |  Haversine-calibrated equirectangular projection
-     |  10m x 10m cells
+/app/maps/{mission_id}_map.html  (stored server-side)
      v
-anomaly_simulator.py / detection/detectors.py
-     |  RuleBasedDetector  — altitude variance threshold
-     |  RandomDetector     — probability-based (testing)
-     |  CNNDetector        — plug in ResNet/EfficientNet/YOLO
-     v
-map_generator.py
-     |  Folium map with 3 layers:
-     |  - Grid overlay (colour-coded by anomaly density)
-     |  - Animated flight path (AntPath)
-     |  - Anomaly points (red CircleMarkers)
-     v
-output/field_map.html
+GET /map-html  →  React iframe (CNN Folium Map tab)
 ```
 
 ---
@@ -65,27 +77,69 @@ HTTP Request
      |
      v
 FastAPI Router (app/api/)
-     |
+     |  auth.py       — register, login, JWT
+     |  fields.py     — CRUD + grid generation
+     |  missions.py   — telemetry, video, plan uploads
+     |  analytics.py  — trend endpoint
      v
 Service Layer (app/services/)
-     |  Business logic
-     |  Calls pipeline modules
-     |  Builds PostGIS geometries
-     |
+     |  field_service.py    — boundary → grid cells
+     |  mission_service.py  — telemetry pipeline orchestration
      v
 Repository Layer (app/repositories/)
-     |  All database queries
-     |  SQLAlchemy async ORM
-     |
+     |  All database queries via SQLAlchemy async ORM
      v
-PostgreSQL + PostGIS
-     |  7 tables with spatial indexes
-     |  GIST indexes on all geometry columns
+PostgreSQL 16 + PostGIS 3.4
+     |  7 tables, GIST indexes on all geometry columns
 ```
 
 ---
 
-## Anomaly Detection Abstraction
+## Frontend Architecture
+
+```
+React + Vite + Tailwind CSS
+     |
+     ├── Login.jsx           JWT login, stores token in localStorage
+     ├── Dashboard.jsx       Field list + create field modal
+     ├── FieldDetail.jsx     Mission list + 3-panel upload workflow
+     │     Panel 1: Upload autopilot plan (.waypoints/.plan)
+     │     Panel 2: Upload GPS telemetry (.xls/.csv) → rule-based pipeline
+     │     Panel 3: Upload video (.mp4) + CSV → CNN pipeline
+     └── MissionMap.jsx      Two-tab map view
+           Tab 1: GPS Grid Map  — React Leaflet + GeoJSON grid overlay
+           Tab 2: CNN Folium Map — iframe → /map-html endpoint
+```
+
+---
+
+## CNN Model (PatchCNN)
+
+```
+Input: 17x17x3 RGB patch from drone frame
+     |
+     v
+Conv2d(3→32, 3x3) + ReLU + MaxPool2d(2)
+     |
+     v
+Conv2d(32→64, 3x3) + ReLU + MaxPool2d(2)
+     |
+     v
+Conv2d(64→128, 3x3) + ReLU
+     |
+     v
+Flatten → Linear(2048→128) → ReLU → Linear(128→2)
+     |
+     v
+Softmax → class 0 (normal) / class 1 (hybrid/off-type)
+```
+
+Trained on paddy field image patches with binary masks.
+Weights stored in `backend/patch_cnn_model.pth`.
+
+---
+
+## Anomaly Detection Abstraction (Telemetry Pipeline)
 
 ```python
 BaseAnomalyDetector (abstract)
@@ -112,7 +166,7 @@ Field created
 Grid cells generated (n_rows x n_cols polygons)
      |
      v
-Stored in grid_cells table (permanent)
+Stored in grid_cells table (permanent, never regenerated)
      |
      v
 Mission 1 → references same grid_cells by (row, col)
@@ -143,24 +197,21 @@ The trend endpoint returns all missions ordered by flight_date for charting.
 
 ## Coordinate Handling
 
-The raw telemetry has non-standard coordinates:
+Raw telemetry from the XLS file has non-standard coordinates:
 - Latitude ~77 (valid range: -90 to 90)
 - Longitude ~405 (valid range: -180 to 180)
 
-`data_processor.py` detects this and remaps both columns onto a real GPS
-bounding box centred on the configured field origin (Erode, Tamil Nadu).
-
-When real GPS data is available, it passes through unchanged.
+`mission_service._load_telemetry()` detects this and remaps both columns
+onto a real GPS bounding box centred on the configured field origin
+(Erode, Tamil Nadu by default). Real GPS data passes through unchanged.
 
 ---
 
-## Future Extensions
+## Database Migrations
 
-| Feature | Where to add |
-|---------|-------------|
-| CNN model | `backend/app/detection/detectors.py` — subclass `CNNDetector` |
-| WebSocket streaming | `backend/app/api/missions.py` — add SSE endpoint |
-| React frontend | Consume GeoJSON endpoints from `/anomalies/geojson` |
-| Heatmap layer | `map_generator.py` — add `folium.plugins.HeatMap` |
-| UTM projection | `grid_engine.py` — swap equirectangular for pyproj |
-| MQTT telemetry | New `app/api/stream.py` router |
+| Revision | Description |
+|----------|-------------|
+| 0001 | Initial schema — all 7 tables |
+| 0002 | Add `waypoint_filename`, `waypoint_raw` to missions |
+
+Run via: `docker compose exec api alembic upgrade head`

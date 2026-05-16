@@ -39,6 +39,7 @@ grid_cells <──────────── anomalies           |
 | hashed_password | VARCHAR(255) | bcrypt hash |
 | is_active | BOOLEAN | |
 | created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | |
 
 ---
 
@@ -59,6 +60,8 @@ grid_cells <──────────── anomalies           |
 | origin_lon | FLOAT | SW corner longitude |
 | n_rows | INTEGER | |
 | n_cols | INTEGER | |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | |
 
 ---
 
@@ -97,8 +100,12 @@ Unique constraint: `(field_id, row, col)`
 | anomaly_point_count | INTEGER | |
 | anomaly_cell_count | INTEGER | |
 | duration_s | FLOAT | |
-| waypoints | JSON | Mission planner waypoints |
+| waypoints | JSON | Mission planner waypoints array |
+| waypoint_filename | VARCHAR(255) | Uploaded plan filename |
+| waypoint_raw | TEXT | Raw plan file content |
 | flight_date | TIMESTAMPTZ | |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | |
 
 ---
 
@@ -130,6 +137,7 @@ Unique constraint: `(field_id, row, col)`
 | anomaly_count | INTEGER | |
 | total_points | INTEGER | |
 | density | FLOAT | anomaly_count / total_points |
+| created_at | TIMESTAMPTZ | |
 
 Unique constraint: `(mission_id, grid_cell_id)`
 
@@ -151,6 +159,15 @@ Unique constraint: `(mission_id, grid_cell_id)`
 | cell_change_count | INTEGER | +/- vs previous mission |
 | hotspot_cell_ids | JSON | Recurring anomaly cell IDs |
 | computed_at | TIMESTAMPTZ | |
+
+---
+
+## Migrations
+
+| Revision | File | Changes |
+|----------|------|---------|
+| 0001 | `0001_initial_schema.py` | Create all 7 tables + PostGIS extension |
+| 0002 | `0002_add_waypoint_columns.py` | Add `waypoint_filename`, `waypoint_raw` to missions |
 
 ---
 

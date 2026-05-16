@@ -121,14 +121,25 @@ class MissionService:
         return mission
 
     def _load_telemetry(self, path: str, field) -> pd.DataFrame:
-        """Load telemetry from CSV or XLS file."""
-        if path.endswith(".csv"):
-            df = pd.read_csv(path)
+        """Load telemetry from ArduPilot CSV, plain CSV, or XLS file."""
+        if path.lower().endswith(".csv"):
+            df = self._try_load_csv(path)
         else:
             df = pd.read_excel(path)
+            df.columns = [c.strip().lower() for c in df.columns]
 
-        df.columns = [c.strip().lower() for c in df.columns]
-        df = df.rename(columns={"latitude": "raw_lat", "longitude": "raw_lon"})
+        # Map all known column name variants → internal names
+        df = df.rename(columns={
+            "latitude":   "raw_lat",
+            "longitude":  "raw_lon",
+            "altitude_m": "altitude",
+            "speed_ms":   "speed",
+        })
+        if "altitude" not in df.columns:
+            df["altitude"] = 0.0
+        if "speed" not in df.columns:
+            df["speed"] = 0.0
+
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         df = df.sort_values("timestamp").reset_index(drop=True)
 
@@ -141,6 +152,27 @@ class MissionService:
         t0 = df["timestamp"].iloc[0]
         df["elapsed_s"] = (df["timestamp"] - t0).dt.total_seconds()
         return df
+
+    @staticmethod
+    def _try_load_csv(path: str) -> pd.DataFrame:
+        """Try plain CSV first; fall back to ArduPilot log parser on failure."""
+        try:
+            df = pd.read_csv(path)
+            df.columns = [c.strip().lower() for c in df.columns]
+            # ArduPilot CSV has a positional 'msgtype' column, not named columns
+            if "timestamp" in df.columns and "latitude" in df.columns:
+                return df
+            raise ValueError("Not a plain telemetry CSV")
+        except Exception:
+            pass
+
+        # ArduPilot log format — use the project logparser
+        import sys, os
+        sys.path.insert(0, "/app")
+        from logparser import build_clean_dataset
+        clean = build_clean_dataset(path)
+        clean.columns = [c.strip().lower() for c in clean.columns]
+        return clean
 
     def _assign_grid_indices(self, df: pd.DataFrame, field) -> pd.DataFrame:
         """Use the field's permanent origin — never recompute from flight data."""
@@ -158,7 +190,7 @@ class MissionService:
             rows.append(TelemetryPoint(
                 mission_id=mission_id,
                 geom=from_shape(Point(float(r["lon"]), float(r["lat"])), srid=4326),
-                altitude_m=float(r["altitude"]),
+                altitude_m=float(r.get("altitude", 0)),
                 speed_ms=float(r.get("speed", 0)),
                 roll_deg=float(r["roll_deg"]) if "roll_deg" in r else None,
                 pitch_deg=float(r["pitch_deg"]) if "pitch_deg" in r else None,

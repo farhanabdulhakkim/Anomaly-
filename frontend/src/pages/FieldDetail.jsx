@@ -16,6 +16,8 @@ export default function FieldDetail() {
   })
   const [uploading, setUploading] = useState(null)
   const [uploadingPlan, setUploadingPlan] = useState(null)
+  const [uploadingVideo, setUploadingVideo] = useState(null)
+  const [videoFiles, setVideoFiles] = useState({}) // missionId -> {video, csv}
   const [loading, setLoading] = useState(false)
   const [flightDates, setFlightDates] = useState({})
   const [activeTab, setActiveTab] = useState('missions')
@@ -68,6 +70,21 @@ export default function FieldDetail() {
       fetchData()
     } catch (err) { alert(err.response?.data?.detail || 'Upload failed') }
     finally { setUploading(null) }
+  }
+
+  // Upload video + GPS CSV → CNN pipeline
+  const handleUploadVideo = async (missionId) => {
+    const files = videoFiles[missionId]
+    if (!files?.video || !files?.csv) return alert('Select both a video and a CSV file')
+    setUploadingVideo(missionId)
+    try {
+      const form = new FormData()
+      form.append('video', files.video)
+      form.append('csv_file', files.csv)
+      await api.post(`/api/fields/${fieldId}/missions/${missionId}/upload-video`, form)
+      fetchData()
+    } catch (err) { alert(err.response?.data?.detail || 'Video upload failed') }
+    finally { setUploadingVideo(null) }
   }
 
   const statusColor = (s) => ({
@@ -151,7 +168,7 @@ export default function FieldDetail() {
                   </div>
 
                   {/* Two-panel workflow */}
-                  <div className="border-t border-gray-800 grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-800">
+                  <div className="border-t border-gray-800 grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-gray-800">
 
                     {/* Panel 1: Mission Planner Plan */}
                     <div className="px-5 py-4">
@@ -225,6 +242,44 @@ export default function FieldDetail() {
                             <p className="text-xs text-red-400 mt-2">Previous upload failed. Try again.</p>
                           )}
                         </>
+                      )}
+                    </div>
+
+                    {/* Panel 3: CNN Video Pipeline */}
+                    <div className="px-5 py-4">
+                      <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">
+                        CNN Video Detection
+                      </p>
+                      <div className="space-y-2 mb-3">
+                        <div>
+                          <label className="text-xs text-gray-400 block mb-1">Drone Video (.mp4)</label>
+                          <label className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 px-3 py-2 rounded-lg text-xs cursor-pointer transition-all">
+                            {videoFiles[m.id]?.video ? videoFiles[m.id].video.name : 'Choose video...'}
+                            <input type="file" accept=".mp4,video/*" className="hidden"
+                              onChange={(e) => e.target.files[0] && setVideoFiles(v => ({ ...v, [m.id]: { ...v[m.id], video: e.target.files[0] } }))} />
+                          </label>
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-400 block mb-1">ArduPilot GPS Log (.csv)</label>
+                          <label className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 px-3 py-2 rounded-lg text-xs cursor-pointer transition-all">
+                            {videoFiles[m.id]?.csv ? videoFiles[m.id].csv.name : 'Choose CSV...'}
+                            <input type="file" accept=".csv" className="hidden"
+                              onChange={(e) => e.target.files[0] && setVideoFiles(v => ({ ...v, [m.id]: { ...v[m.id], csv: e.target.files[0] } }))} />
+                          </label>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleUploadVideo(m.id)}
+                        disabled={uploadingVideo === m.id || !videoFiles[m.id]?.video || !videoFiles[m.id]?.csv}
+                        className="w-full bg-purple-600 hover:bg-purple-700 disabled:opacity-40 text-white py-2 rounded-lg text-xs font-medium transition-all">
+                        {uploadingVideo === m.id ? 'Running CNN...' : 'Run CNN Pipeline'}
+                      </button>
+                      {m.status === 'completed' && (
+                        <button
+                          onClick={() => navigate(`/fields/${fieldId}/missions/${m.id}`)}
+                          className="w-full mt-2 bg-gray-700 hover:bg-gray-600 text-white py-2 rounded-lg text-xs font-medium transition-all">
+                          View Folium Map
+                        </button>
                       )}
                     </div>
                   </div>
